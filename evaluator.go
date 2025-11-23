@@ -6,16 +6,56 @@ import (
 
 // Evaluator evaluates permissions based on ACL rules
 type Evaluator struct {
-	acl ACL
+	acl          ACL
+	cache        *PermissionCache
+	patternCache *PatternCache
 }
 
 // NewEvaluator creates a new permission evaluator
 func NewEvaluator(acl ACL) *Evaluator {
-	return &Evaluator{acl: acl}
+	return &Evaluator{
+		acl:          acl,
+		cache:        nil, // Cache is optional
+		patternCache: nil, // Pattern cache is optional
+	}
+}
+
+// NewEvaluatorWithCache creates a new evaluator with caching enabled
+func NewEvaluatorWithCache(acl ACL, cache *PermissionCache, patternCache *PatternCache) *Evaluator {
+	return &Evaluator{
+		acl:          acl,
+		cache:        cache,
+		patternCache: patternCache,
+	}
 }
 
 // Evaluate checks if the given operation is allowed for the context
 func (e *Evaluator) Evaluate(ctx *EvaluationContext) (bool, error) {
+	// Check cache first if enabled
+	if e.cache != nil && ctx.Identity != nil {
+		cacheKey := CacheKey{
+			UserID:    ctx.Identity.UserID,
+			Path:      ctx.Path,
+			Operation: ctx.Operation,
+		}
+		if allowed, found := e.cache.Get(cacheKey); found {
+			return allowed, nil
+		}
+
+		// Evaluate and cache the result
+		allowed, err := e.evaluateUncached(ctx)
+		if err == nil {
+			e.cache.Set(cacheKey, allowed)
+		}
+		return allowed, err
+	}
+
+	// No cache, evaluate directly
+	return e.evaluateUncached(ctx)
+}
+
+// evaluateUncached performs the actual permission evaluation without caching
+func (e *Evaluator) evaluateUncached(ctx *EvaluationContext) (bool, error) {
 	// Find all matching entries
 	var matchingEntries []ACLEntry
 	for _, entry := range e.acl.Entries {
@@ -181,4 +221,27 @@ func (e *Evaluator) IsAdmin(identity *Identity, path string) bool {
 	}
 	allowed, _ := e.Evaluate(ctx)
 	return allowed
+}
+
+// ClearCache clears the permission cache
+func (e *Evaluator) ClearCache() {
+	if e.cache != nil {
+		e.cache.Clear()
+	}
+}
+
+// InvalidateCache invalidates cache entries for a user and/or path prefix
+func (e *Evaluator) InvalidateCache(userID string, pathPrefix string) {
+	if e.cache != nil {
+		e.cache.Invalidate(userID, pathPrefix)
+	}
+}
+
+// GetCacheStats returns cache statistics
+func (e *Evaluator) GetCacheStats() *CacheStats {
+	if e.cache != nil {
+		stats := e.cache.Stats()
+		return &stats
+	}
+	return nil
 }
