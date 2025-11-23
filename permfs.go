@@ -68,9 +68,10 @@ type File interface {
 
 // PermFS wraps a FileSystem with permission checking
 type PermFS struct {
-	base      FileSystem
-	evaluator *Evaluator
-	config    Config
+	base        FileSystem
+	evaluator   *Evaluator
+	config      Config
+	auditLogger *AuditLogger
 }
 
 // New creates a new permission filesystem
@@ -79,15 +80,47 @@ func New(base FileSystem, config Config) (*PermFS, error) {
 		return nil, ErrInvalidConfig
 	}
 
+	// Set default cache configuration if not specified
+	if config.Performance.CacheEnabled {
+		if config.Performance.CacheTTL == 0 {
+			config.Performance.CacheTTL = 5 * time.Minute
+		}
+		if config.Performance.CacheMaxSize == 0 {
+			config.Performance.CacheMaxSize = 10000
+		}
+	}
+
+	// Create evaluator with or without cache
+	var evaluator *Evaluator
+	if config.Performance.CacheEnabled {
+		permCache := NewPermissionCache(
+			config.Performance.CacheMaxSize,
+			config.Performance.CacheTTL,
+		)
+		var patternCache *PatternCache
+		if config.Performance.PatternCacheEnabled {
+			patternCache = NewPatternCache()
+		}
+		evaluator = NewEvaluatorWithCache(config.ACL, permCache, patternCache)
+	} else {
+		evaluator = NewEvaluator(config.ACL)
+	}
+
+	// Create audit logger
+	auditLogger := NewAuditLogger(config.Audit)
+
 	return &PermFS{
-		base:      base,
-		evaluator: NewEvaluator(config.ACL),
-		config:    config,
+		base:        base,
+		evaluator:   evaluator,
+		config:      config,
+		auditLogger: auditLogger,
 	}, nil
 }
 
 // checkPermission checks if the operation is allowed
 func (pfs *PermFS) checkPermission(ctx context.Context, path string, op Operation) error {
+	startTime := time.Now()
+
 	identity, err := GetIdentity(ctx)
 	if err != nil {
 		return err
@@ -101,6 +134,39 @@ func (pfs *PermFS) checkPermission(ctx context.Context, path string, op Operatio
 	}
 
 	allowed, err := pfs.evaluator.Evaluate(evalCtx)
+	duration := time.Since(startTime)
+
+	// Log audit event
+	if pfs.auditLogger != nil {
+		event := &AuditEvent{
+			Timestamp:  startTime,
+			RequestID:  GetRequestID(ctx),
+			UserID:     identity.UserID,
+			Groups:     identity.Groups,
+			Roles:      identity.Roles,
+			Operation:  op.String(),
+			Path:       path,
+			Duration:   duration,
+			Metadata:   evalCtx.Metadata,
+		}
+
+		if sourceIP, ok := evalCtx.Metadata["source_ip"].(string); ok {
+			event.SourceIP = sourceIP
+		}
+
+		if err != nil {
+			event.Result = AuditResultError
+			event.Reason = err.Error()
+		} else if allowed {
+			event.Result = AuditResultAllowed
+		} else {
+			event.Result = AuditResultDenied
+			event.Reason = "access denied by ACL"
+		}
+
+		pfs.auditLogger.Log(event)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -257,6 +323,8 @@ func (pfs *PermFS) GetEffectiveRules(path string) []ACLEntry {
 // AddRule adds a new ACL entry (for dynamic rule management)
 func (pfs *PermFS) AddRule(entry ACLEntry) error {
 	pfs.evaluator.acl.Entries = append(pfs.evaluator.acl.Entries, entry)
+	// Invalidate cache since rules have changed
+	pfs.ClearCache()
 	return nil
 }
 
@@ -270,5 +338,46 @@ func (pfs *PermFS) RemoveRule(entry ACLEntry) error {
 		}
 	}
 	pfs.evaluator.acl.Entries = newEntries
+	// Invalidate cache since rules have changed
+	pfs.ClearCache()
+	return nil
+}
+
+// ClearCache clears the permission cache
+func (pfs *PermFS) ClearCache() {
+	pfs.evaluator.ClearCache()
+}
+
+// InvalidateCache invalidates cache entries for a user and/or path prefix
+func (pfs *PermFS) InvalidateCache(userID string, pathPrefix string) {
+	pfs.evaluator.InvalidateCache(userID, pathPrefix)
+}
+
+// GetCacheStats returns cache statistics
+func (pfs *PermFS) GetCacheStats() *CacheStats {
+	return pfs.evaluator.GetCacheStats()
+}
+
+// GetAuditStats returns audit statistics
+func (pfs *PermFS) GetAuditStats() AuditStats {
+	if pfs.auditLogger != nil {
+		return pfs.auditLogger.GetMetrics().GetStats()
+	}
+	return AuditStats{}
+}
+
+// GetAuditMetrics returns the audit metrics object
+func (pfs *PermFS) GetAuditMetrics() *AuditMetrics {
+	if pfs.auditLogger != nil {
+		return pfs.auditLogger.GetMetrics()
+	}
+	return nil
+}
+
+// Close closes the permission filesystem and shuts down background tasks
+func (pfs *PermFS) Close() error {
+	if pfs.auditLogger != nil {
+		return pfs.auditLogger.Close()
+	}
 	return nil
 }

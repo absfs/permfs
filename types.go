@@ -2,7 +2,9 @@ package permfs
 
 import (
 	"fmt"
+	"io"
 	"strings"
+	"time"
 )
 
 // Operation represents a filesystem operation type
@@ -307,12 +309,28 @@ type Config struct {
 
 // AuditConfig contains audit logging configuration (Phase 3)
 type AuditConfig struct {
+	// Enabled enables audit logging
 	Enabled bool
-	// Additional fields to be implemented in Phase 3
+	// Writer is where audit logs are written (defaults to os.Stdout)
+	Writer io.Writer
+	// Level controls what events are logged
+	Level *AuditLevel
+	// Async enables asynchronous logging
+	Async bool
+	// BufferSize is the size of the async buffer (default: 1000)
+	BufferSize int
+	// Handler is an optional custom event handler
+	Handler AuditHandler
 }
 
 // PerformanceConfig contains performance optimization settings (Phase 2)
 type PerformanceConfig struct {
+	// CacheEnabled enables permission result caching
 	CacheEnabled bool
-	// Additional fields to be implemented in Phase 2
+	// CacheTTL is the time-to-live for cache entries
+	CacheTTL time.Duration
+	// CacheMaxSize is the maximum number of entries in the cache
+	CacheMaxSize int
+	// PatternCacheEnabled enables pattern compilation caching
+	PatternCacheEnabled bool
 }
