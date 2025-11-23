@@ -31,3 +31,9 @@ Thumbs.db
 # Build artifacts
 /bin/
 /dist/
+
+# Example binaries
+examples/*/main
+examples/basic/basic
+examples/multi_tenant/multi_tenant
+examples/comprehensive/comprehensive
