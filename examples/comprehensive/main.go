@@ -11,14 +11,14 @@ import (
 	"github.com/absfs/permfs"
 )
 
-// This example demonstrates all Phase 1-3 features:
+// This example demonstrates all Phase 1-4 features:
 // - ACL-based permissions
 // - Conditions (time-based, IP-based, custom)
 // - Permission caching
 // - Audit logging with metrics
 
 func main() {
-	fmt.Println("=== Comprehensive PermFS Example ===\n")
+	fmt.Println("=== Comprehensive PermFS Example ===")
 
 	// Create a mock base filesystem
 	base := &mockFS{}
@@ -127,7 +127,7 @@ func main() {
 	}
 	defer pfs.Close()
 
-	fmt.Println("✓ Permission filesystem created with caching and audit logging\n")
+	fmt.Println("✓ Permission filesystem created with caching and audit logging")
 
 	// Example 1: Basic access control
 	fmt.Println("--- Example 1: Basic Access Control ---")
