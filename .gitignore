@@ -37,3 +37,8 @@ examples/*/main
 examples/basic/basic
 examples/multi_tenant/multi_tenant
 examples/comprehensive/comprehensive
+
+# Claude Code
+.claude/
+CLAUDE.md
+.project_meta/
