@@ -6,6 +6,51 @@ Fine-grained access control and permission enforcement for the AbsFS filesystem 
 
 `permfs` provides a powerful permission layer for filesystem operations, enabling fine-grained access control with support for path-based rules, Access Control Lists (ACLs), and comprehensive audit logging. It wraps any `absfs.FileSystem` implementation and enforces security policies before delegating operations to the underlying filesystem.
 
+## absfs.FileSystem Compliance
+
+`permfs` provides full `absfs.FileSystem` compliance through the `AbsAdapter` type. The adapter bridges permfs's context-aware design with the standard absfs interface:
+
+```go
+import (
+    "github.com/absfs/absfs"
+    "github.com/absfs/permfs"
+)
+
+// Create a permission-controlled filesystem
+pfs, _ := permfs.New(baseFS, config)
+
+// Wrap in an adapter to get absfs.FileSystem compatibility
+adapter := permfs.NewAbsAdapter(pfs, "alice")  // Pre-configured identity
+
+// Now use it anywhere absfs.FileSystem is expected
+var fs absfs.FileSystem = adapter
+f, _ := fs.Open("/home/alice/file.txt")
+```
+
+### Context Handling Strategy
+
+permfs uses context for identity propagation, while absfs does not support context. The `AbsAdapter` resolves this by:
+
+1. **Stored Context**: The adapter maintains an internal context with user identity
+2. **SetIdentity()**: Change the identity at runtime for different operations
+3. **SetContext()**: Provide a full custom context for advanced use cases
+
+```go
+adapter := permfs.NewAbsAdapter(pfs, "alice")
+
+// Operations run as alice
+adapter.Open("/home/alice/file.txt")
+
+// Switch to bob
+adapter.SetIdentity("bob", []string{"developers"}, nil)
+adapter.Open("/projects/code.go")
+
+// Use full context control
+ctx := permfs.WithUserGroupsAndRoles(context.Background(),
+    "charlie", []string{"admins"}, []string{"superuser"})
+adapter.SetContext(ctx)
+```
+
 Key features:
 - **Path-based permission rules** with wildcard support
 - **Access Control Lists (ACLs)** with user/group/role permissions

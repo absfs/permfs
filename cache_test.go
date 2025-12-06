@@ -307,6 +307,79 @@ func TestCacheKeyString(t *testing.T) {
 	}
 }
 
+func TestPermissionCacheIsEnabled(t *testing.T) {
+	cache := NewPermissionCache(5, 1*time.Minute)
+
+	if !cache.IsEnabled() {
+		t.Error("Expected cache to be enabled by default")
+	}
+
+	cache.Disable()
+	if cache.IsEnabled() {
+		t.Error("Expected cache to be disabled")
+	}
+
+	cache.Enable()
+	if !cache.IsEnabled() {
+		t.Error("Expected cache to be enabled after Enable()")
+	}
+}
+
+func TestMatchesPrefix(t *testing.T) {
+	tests := []struct {
+		path     string
+		prefix   string
+		expected bool
+	}{
+		{"/data/file.txt", "/data", true},
+		{"/data/file.txt", "", true},
+		{"/data/file.txt", "/home", false},
+		{"/d", "/data", false}, // path shorter than prefix
+	}
+
+	for _, tt := range tests {
+		got := matchesPrefix(tt.path, tt.prefix)
+		if got != tt.expected {
+			t.Errorf("matchesPrefix(%q, %q) = %v, want %v", tt.path, tt.prefix, got, tt.expected)
+		}
+	}
+}
+
+func TestCacheEntryIsExpired(t *testing.T) {
+	entry := &CacheEntry{
+		ExpiresAt: time.Now().Add(-1 * time.Second),
+	}
+
+	if !entry.IsExpired() {
+		t.Error("Expected entry to be expired")
+	}
+
+	entry.ExpiresAt = time.Now().Add(1 * time.Hour)
+	if entry.IsExpired() {
+		t.Error("Expected entry to not be expired")
+	}
+}
+
+func TestPermissionCacheUpdateExisting(t *testing.T) {
+	cache := NewPermissionCache(5, 1*time.Minute)
+	key := CacheKey{UserID: "alice", Path: "/file.txt", Operation: OperationRead}
+
+	// Set initial value
+	cache.Set(key, true)
+
+	// Update to different value
+	cache.Set(key, false)
+
+	// Get should return updated value
+	allowed, found := cache.Get(key)
+	if !found {
+		t.Error("Expected to find entry")
+	}
+	if allowed {
+		t.Error("Expected allowed=false after update")
+	}
+}
+
 func BenchmarkCacheGet(b *testing.B) {
 	cache := NewPermissionCache(10000, 5*time.Minute)
 	key := CacheKey{

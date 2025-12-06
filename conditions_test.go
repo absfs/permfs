@@ -368,3 +368,107 @@ func TestNotCondition(t *testing.T) {
 		})
 	}
 }
+
+func TestTimeConditionEvaluate(t *testing.T) {
+	// Test with specific hours that we know work
+	cond := &TimeCondition{
+		AllowedHours: []HourRange{{Start: 0, End: 23}},
+		AllowedDays:  []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday, time.Sunday},
+	}
+
+	ctx := &EvaluationContext{}
+	// This should always be true since we allow all hours and all days
+	if !cond.Evaluate(ctx) {
+		t.Error("Expected TimeCondition to return true for all hours and all days")
+	}
+}
+
+func TestIPConditionString(t *testing.T) {
+	cond, err := NewIPCondition([]string{"192.168.1.0/24"}, nil)
+	if err != nil {
+		t.Fatalf("NewIPCondition error: %v", err)
+	}
+
+	s := cond.String()
+	if s != "IPCondition" {
+		t.Errorf("Expected 'IPCondition', got %q", s)
+	}
+}
+
+func TestIPConditionInvalidCIDR(t *testing.T) {
+	_, err := NewIPCondition([]string{"invalid-cidr"}, nil)
+	if err == nil {
+		t.Error("Expected error for invalid CIDR")
+	}
+}
+
+func TestIPConditionInvalidDenyCIDR(t *testing.T) {
+	_, err := NewIPCondition([]string{"192.168.1.0/24"}, []string{"invalid-deny"})
+	if err == nil {
+		t.Error("Expected error for invalid deny CIDR")
+	}
+}
+
+func TestIPConditionInvalidSourceIP(t *testing.T) {
+	cond, err := NewIPCondition([]string{"192.168.1.0/24"}, nil)
+	if err != nil {
+		t.Fatalf("NewIPCondition error: %v", err)
+	}
+
+	ctx := &EvaluationContext{
+		Metadata: map[string]interface{}{"source_ip": "not-an-ip"},
+	}
+
+	if cond.Evaluate(ctx) {
+		t.Error("Expected false for invalid source IP")
+	}
+}
+
+func TestAndConditionString(t *testing.T) {
+	cond := &AndCondition{
+		Conditions: []Condition{
+			NewFuncCondition("test", func(*EvaluationContext) bool { return true }),
+		},
+	}
+
+	s := cond.String()
+	if s != "AndCondition" {
+		t.Errorf("Expected 'AndCondition', got %q", s)
+	}
+}
+
+func TestOrConditionString(t *testing.T) {
+	cond := &OrCondition{
+		Conditions: []Condition{
+			NewFuncCondition("test", func(*EvaluationContext) bool { return true }),
+		},
+	}
+
+	s := cond.String()
+	if s != "OrCondition" {
+		t.Errorf("Expected 'OrCondition', got %q", s)
+	}
+}
+
+func TestNotConditionString(t *testing.T) {
+	cond := &NotCondition{
+		Condition: NewFuncCondition("test", func(*EvaluationContext) bool { return true }),
+	}
+
+	s := cond.String()
+	if s != "NotCondition" {
+		t.Errorf("Expected 'NotCondition', got %q", s)
+	}
+}
+
+func TestMetadataConditionString(t *testing.T) {
+	cond := &MetadataCondition{
+		Key:    "test",
+		Values: []string{"value"},
+	}
+
+	s := cond.String()
+	if s != "MetadataCondition:test" {
+		t.Errorf("Expected 'MetadataCondition:test', got %q", s)
+	}
+}

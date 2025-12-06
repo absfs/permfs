@@ -545,3 +545,457 @@ func TestAddRemoveRule(t *testing.T) {
 		t.Error("expected access to be denied after removing rule")
 	}
 }
+
+func TestNewPermFSNilBase(t *testing.T) {
+	_, err := New(nil, Config{})
+	if err != ErrInvalidConfig {
+		t.Errorf("Expected ErrInvalidConfig, got %v", err)
+	}
+}
+
+func TestPermFSWithCaching(t *testing.T) {
+	mock := &mockFileSystem{shouldReturnFile: true}
+	acl := ACL{
+		Entries: []ACLEntry{
+			{
+				Subject:     User("alice"),
+				PathPattern: "/**",
+				Permissions: Read,
+				Effect:      Allow,
+				Priority:    100,
+			},
+		},
+		Default: Deny,
+	}
+
+	config := Config{
+		ACL: acl,
+		Performance: PerformanceConfig{
+			CacheEnabled:        true,
+			CacheTTL:            5 * time.Minute,
+			CacheMaxSize:        1000,
+			PatternCacheEnabled: true,
+		},
+	}
+
+	pfs, err := New(mock, config)
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	ctx := WithUser(context.Background(), "alice")
+
+	// First call
+	_, err = pfs.OpenFile(ctx, "/file.txt", os.O_RDONLY, 0644)
+	if err != nil {
+		t.Errorf("Expected access to be allowed: %v", err)
+	}
+
+	// Second call should use cache
+	_, err = pfs.OpenFile(ctx, "/file.txt", os.O_RDONLY, 0644)
+	if err != nil {
+		t.Errorf("Expected access to be allowed on cache hit: %v", err)
+	}
+
+	// Check cache stats
+	stats := pfs.GetCacheStats()
+	if stats == nil {
+		t.Error("Expected non-nil cache stats")
+	}
+}
+
+func TestPermFSGetEffectiveRules(t *testing.T) {
+	mock := &mockFileSystem{}
+	acl := ACL{
+		Entries: []ACLEntry{
+			{
+				Subject:     User("alice"),
+				PathPattern: "/home/alice/**",
+				Permissions: ReadWrite,
+				Effect:      Allow,
+				Priority:    100,
+			},
+			{
+				Subject:     Everyone(),
+				PathPattern: "/**",
+				Permissions: Read,
+				Effect:      Allow,
+				Priority:    1,
+			},
+		},
+		Default: Deny,
+	}
+
+	pfs, err := New(mock, Config{ACL: acl})
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	rules := pfs.GetEffectiveRules("/home/alice/file.txt")
+	if len(rules) != 2 {
+		t.Errorf("Expected 2 matching rules, got %d", len(rules))
+	}
+
+	rules = pfs.GetEffectiveRules("/other/file.txt")
+	if len(rules) != 1 {
+		t.Errorf("Expected 1 matching rule, got %d", len(rules))
+	}
+}
+
+func TestPermFSInvalidateCache(t *testing.T) {
+	mock := &mockFileSystem{shouldReturnFile: true}
+	acl := ACL{
+		Entries: []ACLEntry{
+			{
+				Subject:     User("alice"),
+				PathPattern: "/**",
+				Permissions: Read,
+				Effect:      Allow,
+				Priority:    100,
+			},
+		},
+		Default: Deny,
+	}
+
+	config := Config{
+		ACL: acl,
+		Performance: PerformanceConfig{
+			CacheEnabled: true,
+			CacheTTL:     5 * time.Minute,
+			CacheMaxSize: 1000,
+		},
+	}
+
+	pfs, err := New(mock, config)
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	ctx := WithUser(context.Background(), "alice")
+
+	// Populate cache
+	pfs.OpenFile(ctx, "/file.txt", os.O_RDONLY, 0644)
+
+	// Invalidate cache for alice
+	pfs.InvalidateCache("alice", "/file")
+
+	// Should not panic
+	pfs.ClearCache()
+}
+
+func TestPermFSGetAuditStats(t *testing.T) {
+	mock := &mockFileSystem{shouldReturnFile: true}
+	acl := ACL{
+		Entries: []ACLEntry{
+			{
+				Subject:     User("alice"),
+				PathPattern: "/**",
+				Permissions: Read,
+				Effect:      Allow,
+				Priority:    100,
+			},
+		},
+		Default: Deny,
+	}
+
+	// With audit logging enabled
+	config := Config{
+		ACL: acl,
+		Audit: AuditConfig{
+			Enabled:    true,
+			BufferSize: 100,
+		},
+	}
+
+	pfs, err := New(mock, config)
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	// Perform an operation to generate audit event
+	ctx := WithUser(context.Background(), "alice")
+	pfs.OpenFile(ctx, "/file.txt", os.O_RDONLY, 0644)
+
+	// Get audit stats
+	stats := pfs.GetAuditStats()
+	// Stats should be available even if no events processed yet (async)
+	_ = stats
+
+	// Get audit metrics
+	metrics := pfs.GetAuditMetrics()
+	if metrics == nil {
+		t.Error("Expected non-nil audit metrics")
+	}
+}
+
+func TestPermFSClose(t *testing.T) {
+	mock := &mockFileSystem{}
+	acl := ACL{Default: Deny}
+
+	config := Config{
+		ACL: acl,
+		Audit: AuditConfig{
+			Enabled:    true,
+			BufferSize: 100,
+		},
+	}
+
+	pfs, err := New(mock, config)
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	err = pfs.Close()
+	if err != nil {
+		t.Errorf("Unexpected error on Close: %v", err)
+	}
+}
+
+func TestPermFSCloseNoAudit(t *testing.T) {
+	mock := &mockFileSystem{}
+	acl := ACL{Default: Deny}
+
+	pfs, err := New(mock, Config{ACL: acl})
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	err = pfs.Close()
+	if err != nil {
+		t.Errorf("Unexpected error on Close: %v", err)
+	}
+}
+
+func TestPermFSMkdirAll(t *testing.T) {
+	mock := &mockFileSystem{}
+	acl := ACL{
+		Entries: []ACLEntry{
+			{
+				Subject:     User("alice"),
+				PathPattern: "/home/alice/**",
+				Permissions: ReadWrite,
+				Effect:      Allow,
+				Priority:    100,
+			},
+		},
+		Default: Deny,
+	}
+
+	pfs, err := New(mock, Config{ACL: acl})
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	ctx := WithUser(context.Background(), "alice")
+
+	// Alice can create directories
+	err = pfs.MkdirAll(ctx, "/home/alice/a/b/c", 0755)
+	if err != nil {
+		t.Errorf("Expected MkdirAll to succeed: %v", err)
+	}
+
+	// Bob cannot create directories in alice's home
+	ctx = WithUser(context.Background(), "bob")
+	err = pfs.MkdirAll(ctx, "/home/alice/newdir", 0755)
+	if err == nil {
+		t.Error("Expected MkdirAll to be denied")
+	}
+}
+
+func TestPermFSRemoveAll(t *testing.T) {
+	mock := &mockFileSystem{}
+	acl := ACL{
+		Entries: []ACLEntry{
+			{
+				Subject:     User("alice"),
+				PathPattern: "/home/alice/**",
+				Permissions: Delete,
+				Effect:      Allow,
+				Priority:    100,
+			},
+		},
+		Default: Deny,
+	}
+
+	pfs, err := New(mock, Config{ACL: acl})
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	ctx := WithUser(context.Background(), "alice")
+
+	// Alice can remove recursively
+	err = pfs.RemoveAll(ctx, "/home/alice/dir")
+	if err != nil {
+		t.Errorf("Expected RemoveAll to succeed: %v", err)
+	}
+
+	// Bob cannot remove in alice's home
+	ctx = WithUser(context.Background(), "bob")
+	err = pfs.RemoveAll(ctx, "/home/alice/dir")
+	if err == nil {
+		t.Error("Expected RemoveAll to be denied")
+	}
+}
+
+func TestPermFSLstat(t *testing.T) {
+	mock := &mockFileSystem{}
+	acl := ACL{
+		Entries: []ACLEntry{
+			{
+				Subject:     User("alice"),
+				PathPattern: "/home/alice/**",
+				Permissions: Metadata,
+				Effect:      Allow,
+				Priority:    100,
+			},
+		},
+		Default: Deny,
+	}
+
+	pfs, err := New(mock, Config{ACL: acl})
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	ctx := WithUser(context.Background(), "alice")
+
+	// Alice can lstat her files
+	_, err = pfs.Lstat(ctx, "/home/alice/link")
+	if err != nil {
+		t.Errorf("Expected Lstat to succeed: %v", err)
+	}
+
+	// Bob cannot lstat alice's files
+	ctx = WithUser(context.Background(), "bob")
+	_, err = pfs.Lstat(ctx, "/home/alice/link")
+	if err == nil {
+		t.Error("Expected Lstat to be denied")
+	}
+}
+
+func TestPermFSReadDir(t *testing.T) {
+	mock := &mockFileSystem{}
+	acl := ACL{
+		Entries: []ACLEntry{
+			{
+				Subject:     User("alice"),
+				PathPattern: "/home/alice/**",
+				Permissions: Read,
+				Effect:      Allow,
+				Priority:    100,
+			},
+		},
+		Default: Deny,
+	}
+
+	pfs, err := New(mock, Config{ACL: acl})
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	ctx := WithUser(context.Background(), "alice")
+
+	// Alice can read her directory
+	_, err = pfs.ReadDir(ctx, "/home/alice/")
+	if err != nil {
+		t.Errorf("Expected ReadDir to succeed: %v", err)
+	}
+
+	// Bob cannot read alice's directory
+	ctx = WithUser(context.Background(), "bob")
+	_, err = pfs.ReadDir(ctx, "/home/alice/")
+	if err == nil {
+		t.Error("Expected ReadDir to be denied")
+	}
+}
+
+func TestPermFSChmod(t *testing.T) {
+	mock := &mockFileSystem{}
+	acl := ACL{
+		Entries: []ACLEntry{
+			{
+				Subject:     User("alice"),
+				PathPattern: "/home/alice/**",
+				Permissions: Metadata,
+				Effect:      Allow,
+				Priority:    100,
+			},
+		},
+		Default: Deny,
+	}
+
+	pfs, err := New(mock, Config{ACL: acl})
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	ctx := WithUser(context.Background(), "alice")
+
+	// Alice can chmod her files
+	err = pfs.Chmod(ctx, "/home/alice/file.txt", 0644)
+	if err != nil {
+		t.Errorf("Expected Chmod to succeed: %v", err)
+	}
+
+	// Bob cannot chmod alice's files
+	ctx = WithUser(context.Background(), "bob")
+	err = pfs.Chmod(ctx, "/home/alice/file.txt", 0644)
+	if err == nil {
+		t.Error("Expected Chmod to be denied")
+	}
+}
+
+func TestPermFSChtimes(t *testing.T) {
+	mock := &mockFileSystem{}
+	acl := ACL{
+		Entries: []ACLEntry{
+			{
+				Subject:     User("alice"),
+				PathPattern: "/home/alice/**",
+				Permissions: Metadata,
+				Effect:      Allow,
+				Priority:    100,
+			},
+		},
+		Default: Deny,
+	}
+
+	pfs, err := New(mock, Config{ACL: acl})
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	ctx := WithUser(context.Background(), "alice")
+	now := time.Now()
+
+	// Alice can chtimes her files
+	err = pfs.Chtimes(ctx, "/home/alice/file.txt", now, now)
+	if err != nil {
+		t.Errorf("Expected Chtimes to succeed: %v", err)
+	}
+
+	// Bob cannot chtimes alice's files
+	ctx = WithUser(context.Background(), "bob")
+	err = pfs.Chtimes(ctx, "/home/alice/file.txt", now, now)
+	if err == nil {
+		t.Error("Expected Chtimes to be denied")
+	}
+}
+
+func TestPermFSGetPermissionsNoIdentity(t *testing.T) {
+	mock := &mockFileSystem{}
+	acl := ACL{Default: Deny}
+
+	pfs, err := New(mock, Config{ACL: acl})
+	if err != nil {
+		t.Fatalf("failed to create PermFS: %v", err)
+	}
+
+	ctx := context.Background() // No identity
+
+	_, err = pfs.GetPermissions(ctx, "/file.txt")
+	if err == nil {
+		t.Error("Expected error when no identity")
+	}
+}
