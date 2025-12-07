@@ -31,8 +31,8 @@ func matchPattern(pattern, pathStr string) (bool, error) {
 		return matchDoubleStarPattern(pattern, pathStr)
 	}
 
-	// Use filepath.Match for single * and ? patterns
-	matched, err := filepath.Match(pattern, pathStr)
+	// Use path.Match for single * and ? patterns (works with forward slashes)
+	matched, err := path.Match(pattern, pathStr)
 	if err != nil {
 		return false, ErrInvalidPattern
 	}
@@ -98,7 +98,7 @@ func matchSegments(patternParts, pathParts []string, pi, pathi int) (bool, error
 	}
 
 	// Handle regular patterns (with * and ?)
-	matched, err := filepath.Match(currentPattern, pathParts[pathi])
+	matched, err := path.Match(currentPattern, pathParts[pathi])
 	if err != nil {
 		return false, ErrInvalidPattern
 	}
