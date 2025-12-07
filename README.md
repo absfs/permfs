@@ -1,5 +1,10 @@
 # permfs
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/absfs/permfs.svg)](https://pkg.go.dev/github.com/absfs/permfs)
+[![Go Report Card](https://goreportcard.com/badge/github.com/absfs/permfs)](https://goreportcard.com/report/github.com/absfs/permfs)
+[![CI](https://github.com/absfs/permfs/actions/workflows/ci.yml/badge.svg)](https://github.com/absfs/permfs/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Fine-grained access control and permission enforcement for the AbsFS filesystem abstraction layer.
 
 ## Overview
