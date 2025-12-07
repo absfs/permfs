@@ -1,6 +1,7 @@
 package permfs
 
 import (
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -10,23 +11,28 @@ import (
 //   - * matches any sequence of non-separator characters
 //   - ** matches any sequence including separators (recursive)
 //   - ? matches any single non-separator character
-func matchPattern(pattern, path string) (bool, error) {
-	// Normalize paths - ensure they start with /
-	pattern = filepath.Clean(pattern)
-	path = filepath.Clean(path)
+func matchPattern(pattern, pathStr string) (bool, error) {
+	// Normalize paths to use forward slashes for pattern matching
+	// This ensures consistent behavior across Windows, macOS, and Linux
+	pattern = filepath.ToSlash(filepath.Clean(pattern))
+	pathStr = filepath.ToSlash(filepath.Clean(pathStr))
+
+	// Use path.Clean (not filepath.Clean) to normalize with forward slashes
+	pattern = path.Clean(pattern)
+	pathStr = path.Clean(pathStr)
 
 	// Handle exact match
-	if pattern == path {
+	if pattern == pathStr {
 		return true, nil
 	}
 
 	// Handle ** pattern - matches everything under a directory
 	if strings.Contains(pattern, "**") {
-		return matchDoubleStarPattern(pattern, path)
+		return matchDoubleStarPattern(pattern, pathStr)
 	}
 
 	// Use filepath.Match for single * and ? patterns
-	matched, err := filepath.Match(pattern, path)
+	matched, err := filepath.Match(pattern, pathStr)
 	if err != nil {
 		return false, ErrInvalidPattern
 	}
@@ -113,7 +119,8 @@ type PatternMatcher struct {
 
 // NewPatternMatcher creates a new pattern matcher
 func NewPatternMatcher(pattern string) (*PatternMatcher, error) {
-	pattern = filepath.Clean(pattern)
+	// Normalize to forward slashes for consistent pattern matching
+	pattern = path.Clean(filepath.ToSlash(filepath.Clean(pattern)))
 	hasGlob := strings.ContainsAny(pattern, "*?")
 
 	return &PatternMatcher{
@@ -123,13 +130,16 @@ func NewPatternMatcher(pattern string) (*PatternMatcher, error) {
 }
 
 // Match checks if a path matches the pattern
-func (pm *PatternMatcher) Match(path string) (bool, error) {
+func (pm *PatternMatcher) Match(pathStr string) (bool, error) {
+	// Normalize to forward slashes for consistent pattern matching
+	normalizedPath := path.Clean(filepath.ToSlash(filepath.Clean(pathStr)))
+
 	// Fast path for exact matches
 	if !pm.hasGlob {
-		return pm.pattern == filepath.Clean(path), nil
+		return pm.pattern == normalizedPath, nil
 	}
 
-	return matchPattern(pm.pattern, path)
+	return matchPattern(pm.pattern, pathStr)
 }
 
 // Pattern returns the original pattern string
