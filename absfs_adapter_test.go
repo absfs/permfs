@@ -13,8 +13,8 @@ import (
 
 // Verify compile-time interface compliance
 var (
-	_ absfs.FileSystem = (*AbsAdapter)(nil)
-	_ absfs.SymLinker  = (*AbsAdapter)(nil)
+	_ absfs.Filer     = (*AbsAdapter)(nil)
+	_ absfs.SymLinker = (*AbsAdapter)(nil)
 )
 
 func TestAbsAdapterCreation(t *testing.T) {
@@ -143,25 +143,8 @@ func TestAbsAdapterSetters(t *testing.T) {
 	})
 }
 
-func TestAbsAdapterSeparators(t *testing.T) {
-	mock := &mockFileSystem{shouldReturnFile: true}
-	pfs, _ := New(mock, Config{ACL: ACL{Default: Allow}})
-	adapter := NewAbsAdapter(pfs, &Identity{UserID: "test"})
-
-	t.Run("Separator", func(t *testing.T) {
-		sep := adapter.Separator()
-		if sep != filepath.Separator {
-			t.Errorf("expected separator %d, got %d", filepath.Separator, sep)
-		}
-	})
-
-	t.Run("ListSeparator", func(t *testing.T) {
-		sep := adapter.ListSeparator()
-		if sep != filepath.ListSeparator {
-			t.Errorf("expected list separator %d, got %d", filepath.ListSeparator, sep)
-		}
-	})
-}
+// TestAbsAdapterSeparators removed - Separator and ListSeparator methods
+// are no longer part of the absfs 1.0 interface
 
 func TestAbsAdapterDirectoryNavigation(t *testing.T) {
 	mock := &mockFileSystemWithDir{mockFileSystem: mockFileSystem{shouldReturnFile: true}, isDir: true}

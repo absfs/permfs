@@ -2,6 +2,8 @@ package permfs
 
 import (
 	"context"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,8 +14,9 @@ import (
 
 // Compile-time interface checks
 var (
-	_ absfs.FileSystem = (*AbsAdapter)(nil)
-	_ absfs.SymLinker  = (*AbsAdapter)(nil)
+	// Note: absfs.FileSystem no longer requires Separator/ListSeparator in 1.0
+	_ absfs.Filer     = (*AbsAdapter)(nil)
+	_ absfs.SymLinker = (*AbsAdapter)(nil)
 )
 
 // AbsAdapter wraps a PermFS to implement absfs.FileSystem interface.
@@ -150,16 +153,6 @@ func (a *AbsAdapter) Chown(name string, uid, gid int) error {
 
 // --- absfs.FileSystem additional methods ---
 
-// Separator returns the path separator for this filesystem.
-func (a *AbsAdapter) Separator() uint8 {
-	return filepath.Separator
-}
-
-// ListSeparator returns the list separator (e.g., for PATH) for this filesystem.
-func (a *AbsAdapter) ListSeparator() uint8 {
-	return filepath.ListSeparator
-}
-
 // Chdir changes the current working directory.
 func (a *AbsAdapter) Chdir(dir string) error {
 	path := a.resolvePath(dir)
@@ -255,6 +248,161 @@ func (a *AbsAdapter) Symlink(oldname, newname string) error {
 	return &os.LinkError{Op: "symlink", Old: oldname, New: newname, Err: absfs.ErrNotImplemented}
 }
 
+// ReadDir reads the named directory and returns directory entries.
+func (a *AbsAdapter) ReadDir(name string) ([]fs.DirEntry, error) {
+	path := a.resolvePath(name)
+	ctx := a.getContext()
+
+	// Call the context-based ReadDir that returns []os.FileInfo
+	infos, err := a.pfs.ReadDir(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert []os.FileInfo to []fs.DirEntry
+	entries := make([]fs.DirEntry, len(infos))
+	for i, info := range infos {
+		entries[i] = fileInfoDirEntry{info}
+	}
+	return entries, nil
+}
+
+// ReadFile reads the named file and returns its contents.
+func (a *AbsAdapter) ReadFile(name string) ([]byte, error) {
+	path := a.resolvePath(name)
+	ctx := a.getContext()
+
+	// Open file for reading
+	f, err := a.pfs.OpenFile(ctx, path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// Read entire file
+	return io.ReadAll(f)
+}
+
+// Sub returns a filesystem rooted at dir.
+func (a *AbsAdapter) Sub(dir string) (fs.FS, error) {
+	path := a.resolvePath(dir)
+	ctx := a.getContext()
+
+	// Verify dir exists and is a directory
+	info, err := a.pfs.Stat(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, &os.PathError{Op: "sub", Path: dir, Err: os.ErrInvalid}
+	}
+
+	// Return a new adapter with adjusted root
+	subAdapter := &subAdapter{
+		parent: a,
+		root:   filepath.Clean(path),
+	}
+	return absfs.FilerToFS(subAdapter, path)
+}
+
+// subAdapter implements a sub-filesystem adapter
+type subAdapter struct {
+	parent *AbsAdapter
+	root   string
+}
+
+func (sa *subAdapter) resolvePath(name string) string {
+	return filepath.Join(sa.root, name)
+}
+
+func (sa *subAdapter) OpenFile(name string, flag int, perm os.FileMode) (absfs.File, error) {
+	ctx := sa.parent.getContext()
+	f, err := sa.parent.pfs.OpenFile(ctx, sa.resolvePath(name), flag, perm)
+	if err != nil {
+		return nil, err
+	}
+	return &absFile{f}, nil
+}
+
+func (sa *subAdapter) Mkdir(name string, perm os.FileMode) error {
+	ctx := sa.parent.getContext()
+	return sa.parent.pfs.Mkdir(ctx, sa.resolvePath(name), perm)
+}
+
+func (sa *subAdapter) Remove(name string) error {
+	ctx := sa.parent.getContext()
+	return sa.parent.pfs.Remove(ctx, sa.resolvePath(name))
+}
+
+func (sa *subAdapter) Rename(oldname, newname string) error {
+	ctx := sa.parent.getContext()
+	return sa.parent.pfs.Rename(ctx, sa.resolvePath(oldname), sa.resolvePath(newname))
+}
+
+func (sa *subAdapter) Stat(name string) (os.FileInfo, error) {
+	ctx := sa.parent.getContext()
+	return sa.parent.pfs.Stat(ctx, sa.resolvePath(name))
+}
+
+func (sa *subAdapter) Chmod(name string, mode os.FileMode) error {
+	ctx := sa.parent.getContext()
+	return sa.parent.pfs.Chmod(ctx, sa.resolvePath(name), mode)
+}
+
+func (sa *subAdapter) Chown(name string, uid, gid int) error {
+	ctx := sa.parent.getContext()
+	return sa.parent.pfs.Chown(ctx, sa.resolvePath(name), uid, gid)
+}
+
+func (sa *subAdapter) Chtimes(name string, atime, mtime time.Time) error {
+	ctx := sa.parent.getContext()
+	return sa.parent.pfs.Chtimes(ctx, sa.resolvePath(name), atime, mtime)
+}
+
+func (sa *subAdapter) ReadDir(name string) ([]fs.DirEntry, error) {
+	ctx := sa.parent.getContext()
+	infos, err := sa.parent.pfs.ReadDir(ctx, sa.resolvePath(name))
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]fs.DirEntry, len(infos))
+	for i, info := range infos {
+		entries[i] = fileInfoDirEntry{info}
+	}
+	return entries, nil
+}
+
+func (sa *subAdapter) ReadFile(name string) ([]byte, error) {
+	ctx := sa.parent.getContext()
+	f, err := sa.parent.pfs.OpenFile(ctx, sa.resolvePath(name), os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+func (sa *subAdapter) Sub(dir string) (fs.FS, error) {
+	path := sa.resolvePath(dir)
+	ctx := sa.parent.getContext()
+
+	// Verify dir exists and is a directory
+	info, err := sa.parent.pfs.Stat(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, &os.PathError{Op: "sub", Path: dir, Err: os.ErrInvalid}
+	}
+
+	// Return a new sub-adapter with the new root
+	subSubAdapter := &subAdapter{
+		parent: sa.parent,
+		root:   filepath.Clean(path),
+	}
+	return absfs.FilerToFS(subSubAdapter, path)
+}
+
 // --- absFile wrapper ---
 
 // absFile wraps a permfs.File to implement absfs.File interface.
@@ -330,4 +478,23 @@ func (af *absFile) Readdirnames(n int) ([]string, error) {
 		names[i] = info.Name()
 	}
 	return names, nil
+}
+
+func (af *absFile) ReadDir(n int) ([]fs.DirEntry, error) {
+	// First try direct ReadDir implementation
+	if reader, ok := af.f.(interface{ ReadDir(int) ([]fs.DirEntry, error) }); ok {
+		return reader.ReadDir(n)
+	}
+
+	// Fall back to using Readdir
+	infos, err := af.Readdir(n)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]fs.DirEntry, len(infos))
+	for i, info := range infos {
+		entries[i] = fileInfoDirEntry{info}
+	}
+	return entries, nil
 }

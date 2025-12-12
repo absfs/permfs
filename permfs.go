@@ -267,7 +267,8 @@ func (pfs *PermFS) Lstat(ctx context.Context, name string) (os.FileInfo, error) 
 	return pfs.base.Lstat(ctx, name)
 }
 
-// ReadDir reads a directory with permission checking
+// ReadDir reads a directory with permission checking (context-based, returns []os.FileInfo)
+// This method implements the internal FileSystem interface
 func (pfs *PermFS) ReadDir(ctx context.Context, name string) ([]os.FileInfo, error) {
 	if err := pfs.checkPermission(ctx, name, OperationRead); err != nil {
 		return nil, err
@@ -380,4 +381,25 @@ func (pfs *PermFS) Close() error {
 		return pfs.auditLogger.Close()
 	}
 	return nil
+}
+
+// fileInfoDirEntry wraps os.FileInfo to implement fs.DirEntry
+type fileInfoDirEntry struct {
+	info os.FileInfo
+}
+
+func (d fileInfoDirEntry) Name() string {
+	return d.info.Name()
+}
+
+func (d fileInfoDirEntry) IsDir() bool {
+	return d.info.IsDir()
+}
+
+func (d fileInfoDirEntry) Type() fs.FileMode {
+	return d.info.Mode().Type()
+}
+
+func (d fileInfoDirEntry) Info() (fs.FileInfo, error) {
+	return d.info, nil
 }
